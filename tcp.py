@@ -68,6 +68,7 @@ class Conexao:
         )
         header = fix_checksum(header, dst_addr, src_addr) 
         self.servidor.rede.enviar(header, src_addr)
+        self.server_seq_no += 1
 
     def _exemplo_timer(self):
         # Esta função é só um exemplo e pode ser removida
@@ -89,16 +90,16 @@ class Conexao:
                 self.callback(self, payload)
             self.ack_no += len(payload)
 
-        flags = FLAGS_ACK
-        header = make_header(
-            src_port=dst_port,
-            dst_port=src_port,
-            seq_no=self.server_seq_no,
-            ack_no=self.ack_no,
-            flags=flags
-        )
-        segmento = fix_checksum(header, dst_addr, src_addr)
-        self.servidor.rede.enviar(segmento, src_addr)
+        if len(payload) > 0 or (flags & (FLAGS_SYN | FLAGS_FIN)):
+            header = make_header(
+                src_port=dst_port,
+                dst_port=src_port,
+                seq_no=self.server_seq_no,
+                ack_no=self.ack_no,
+                flags=FLAGS_ACK
+            )
+            segmento = fix_checksum(header, dst_addr, src_addr)
+            self.servidor.rede.enviar(segmento, src_addr)
 
     # Os métodos abaixo fazem parte da API
 
@@ -110,14 +111,29 @@ class Conexao:
         self.callback = callback
 
     def enviar(self, dados):
-        """
-        Usado pela camada de aplicação para enviar dados
-        """
-        # TODO: implemente aqui o envio de dados.
-        # Chame self.servidor.rede.enviar(segmento, dest_addr) para enviar o segmento
-        # que você construir para a camada de rede.
-        
-        pass
+        src_addr, src_port, dst_addr, dst_port = self.id_conexao
+        flags = FLAGS_ACK
+
+        # Fragmenta os dados em chunks de tamanho MSS
+        for i in range(0, len(dados), MSS):
+            chunk = dados[i:i+MSS]  # Pega até MSS bytes
+
+            header = make_header(
+                src_port=dst_port,
+                dst_port=src_port,
+                seq_no=self.server_seq_no,
+                ack_no=self.ack_no,
+                flags=flags
+            )
+
+            segmento = header + chunk
+            segmento = fix_checksum(segmento, dst_addr, src_addr)
+
+            self.servidor.rede.enviar(segmento, src_addr)
+
+            # Atualiza o server_seq_no somente pelo tamanho da chunk
+            self.server_seq_no += len(chunk)
+
 
     def fechar(self):
         """
