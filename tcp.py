@@ -50,13 +50,11 @@ class Conexao:
         self.servidor = servidor
         self.id_conexao = id_conexao
         self.callback = None
-        self.timer = asyncio.get_event_loop().call_later(1, self._exemplo_timer)  # um timer pode ser criado assim; esta linha é só um exemplo e pode ser removida
-        #self.timer.cancel()   # é possível cancelar o timer chamando esse método; esta linha é só um exemplo e pode ser removida
         self.server_seq_no = int.from_bytes(os.urandom(2), 'big')
         self.client_seq_no = client_seq_no
         self.ack_no = self.client_seq_no + 1   
 
-        # Envia o SYN+ACK para o cliente, aceitando a conexão
+        ## Envia o SYN+ACK para o cliente, aceitando a conexão
         src_addr, src_port, dst_addr, dst_port = self.id_conexao
         
         flags = FLAGS_SYN | FLAGS_ACK
@@ -73,14 +71,34 @@ class Conexao:
 
     def _exemplo_timer(self):
         # Esta função é só um exemplo e pode ser removida
+
+        # No construtor da classe,
+        # um timer pode ser criado assim;
+        # self.timer = asyncio.get_event_loop().call_later(1, self._exemplo_timer)
+
+        # é possível cancelar o timer chamando esse método;
+        # self.timer.cancel()
         print('Este é um exemplo de como fazer um timer')
 
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
-        # TODO: trate aqui o recebimento de segmentos provenientes da camada de rede.
-        # Chame self.callback(self, dados) para passar dados para a camada de aplicação após
-        # garantir que eles não sejam duplicados e que tenham sido recebidos em ordem.
-        
-        print('recebido payload: %r' % payload)
+        src_addr, src_port, dst_addr, dst_port = self.id_conexao
+
+        # Verifica se o ACK chegou corretamente (não está duplicado e foi recebido em ordem)
+        if seq_no == self.ack_no:
+            if self.callback and payload:
+                self.callback(self, payload)
+            self.ack_no += len(payload)
+
+        flags = FLAGS_ACK
+        header = make_header(
+            src_port=dst_port,
+            dst_port=src_port,
+            seq_no=self.server_seq_no,
+            ack_no=self.ack_no,
+            flags=flags
+        )
+        segmento = fix_checksum(header, dst_addr, src_addr)
+        self.servidor.rede.enviar(segmento, src_addr)
 
     # Os métodos abaixo fazem parte da API
 
