@@ -1,7 +1,6 @@
 import asyncio
 from tcputils import *
-import random
-import os
+from os import urandom
 
 class Servidor:
     def __init__(self, rede, porta):
@@ -24,6 +23,7 @@ class Servidor:
         if dst_port != self.porta:
             # Ignora segmentos que não são destinados à porta do nosso servidor
             return
+        
         if not self.rede.ignore_checksum and calc_checksum(segment, src_addr, dst_addr) != 0:
             print('descartando segmento com checksum incorreto')
             return
@@ -38,7 +38,6 @@ class Servidor:
             if self.callback:
                 self.callback(conexao)
         elif id_conexao in self.conexoes:
-            # Passa para a conexão adequada se ela já estiver estabelecida
             self.conexoes[id_conexao]._rdt_rcv(seq_no, ack_no, flags, payload)
         else:
             print('%s:%d -> %s:%d (pacote associado a conexão desconhecida)' %
@@ -50,9 +49,10 @@ class Conexao:
         self.servidor = servidor
         self.id_conexao = id_conexao
         self.callback = None
-        self.server_seq_no = int.from_bytes(os.urandom(2), 'big')
+        self.server_seq_no = int.from_bytes(urandom(2), 'big')
         self.client_seq_no = client_seq_no
         self.ack_no = self.client_seq_no + 1   
+        self.fin_enviado = False
 
         ## Envia o SYN+ACK para o cliente, aceitando a conexão
         src_addr, src_port, dst_addr, dst_port = self.id_conexao
@@ -88,9 +88,15 @@ class Conexao:
         if seq_no == self.ack_no:
             if self.callback and payload:
                 self.callback(self, payload)
-            self.ack_no += len(payload)
+                self.ack_no += len(payload)
 
-        if len(payload) > 0 or (flags & (FLAGS_SYN | FLAGS_FIN)):
+            # Trata FIN do cliente
+            if (flags & FLAGS_FIN) == FLAGS_FIN:
+                self.ack_no += 1  # FIN ocupa 1 byte de sequência
+                self.callback(self, b'')
+
+        # Responde com ACK se houver payload, SYN, FIN ou for confirmação do FIN
+        if len(payload) > 0 or (flags & (FLAGS_SYN | FLAGS_FIN)) or (flags & FLAGS_ACK and ack_no > self.server_seq_no):
             header = make_header(
                 src_port=dst_port,
                 dst_port=src_port,
@@ -100,6 +106,10 @@ class Conexao:
             )
             segmento = fix_checksum(header, dst_addr, src_addr)
             self.servidor.rede.enviar(segmento, src_addr)
+
+        # Verifica se é um ACK para o FIN enviado pelo servidor
+        if (flags & FLAGS_ACK) and self.fin_enviado and ack_no == self.server_seq_no:
+            del self.servidor.conexoes[self.id_conexao] 
 
     # Os métodos abaixo fazem parte da API
 
@@ -136,9 +146,19 @@ class Conexao:
 
 
     def fechar(self):
-        """
-        Usado pela camada de aplicação para fechar a conexão
-        """
-        # TODO: implemente aqui o fechamento de conexão
+        src_addr, src_port, dst_addr, dst_port = self.id_conexao
+
+        # Envia FIN + ACK
+        flags = FLAGS_FIN | FLAGS_ACK
+        header = make_header(
+            src_port=dst_port,
+            dst_port=src_port,
+            seq_no=self.server_seq_no,
+            ack_no=self.ack_no,
+            flags=flags
+        )
+        segmento = fix_checksum(header, dst_addr, src_addr)
+        self.servidor.rede.enviar(segmento, src_addr)
         
-        pass
+        self.server_seq_no += 1  # FIN ocupa 1 byte
+        self.fin_enviado = True
